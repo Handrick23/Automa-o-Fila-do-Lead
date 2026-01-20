@@ -1,7 +1,7 @@
 
 # 🚀 Automação Fila do Lead
 
-A ** Automação Fila Lead** é uma solução de automação em Python desenvolvida para transformar bases brutas de vendas em uma **Fila de Atendimento Comercial** inteligente e formatada. O sistema aplica regras de ranqueamento baseadas em performance real, garantindo uma distribuição estratégica de leads para a equipe de vendas.
+A **Automação Fila Lead** é uma solução de automação em Python desenvolvida para transformar bases brutas de vendas em uma **Fila de Atendimento Comercial** inteligente e formatada. O sistema aplica regras de ranqueamento baseadas em performance real, garantindo uma distribuição estratégica de leads para a equipe de vendas.
 
 ---
 
