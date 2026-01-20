@@ -7,12 +7,12 @@ A **Automação Fila Lead** é uma solução de automação em Python desenvolvi
 
 ## 📋 Sumário
 
-* [Visão Geral]
-* [Regras de Negócio]
-* [Funcionamento do Algoritmo]
-* [Tecnologias Utilizadas]
-* [Estrutura da Planilha de Entrada]
-* [Como Utilizar]
+* [Visão Geral](#visão-geral)
+* [Regras de Negócio](#regras-de-negócio)
+* [Funcionamento do Algoritmo](#funcionamento-do-algoritmo)
+* [Tecnologias Utilizadas](#tecnologias-utilizadas)
+* [Estrutura da Planilha de Entrada](#estrutura-da-planilha-de-entrada)
+* [Como Utilizar](#como-utilizar)
 
 ---
 
@@ -36,15 +36,15 @@ O primeiro passo é a exclusão de consultores indisponíveis.
 
 Os consultores ativos são segmentados em três categorias de acordo com o volume de vendas:
 
-* **Categoria A (Alta Performance):** Consultores que realizaram pelo menos uma venda na **semana atual**.
-* **Categoria B (Recuperação):** Consultores que não venderam na semana, mas possuem vendas acumuladas no **mês**.
+* **Categoria A (Alta Performance):** Consultores que realizaram pelo menos uma venda na **semana passada**.
+* **Categoria B (Recuperação):** Consultores que não venderam na semana em questão, mas possuem vendas acumuladas no **mês**.
 * **Categoria C (Base/Entrada):** Consultores sem vendas na semana e sem vendas no mês.
 
-### 3. O "Corte de Elite" (Fila 1 vs Fila 2)
+### 3. Fila 1 vs Fila 2
 
 Para cada filial regional, a distribuição segue a regra da metade superior:
 
-* **Fila 1 (Prioridade Máxima):** Composta pelos **50% melhores** da Categoria A.
+* **Fila 1 (Prioridade Máxima):** Composta pelos **50% "melhores"** da Categoria A.
 * **Fila 2 (Fluxo Geral):** Composta pelos 50% restantes da Categoria A, somados aos consultores das Categorias B e C.
 
 ### 4. Critérios de Desempate e Priorização
@@ -52,8 +52,8 @@ Para cada filial regional, a distribuição segue a regra da metade superior:
 A ordenação dentro de cada categoria segue esta hierarquia:
 
 1. **Venda Novo (New Logo):** Prioridade para quem traz novos clientes.
-2. **Venda Total:** Volume financeiro total.
-3. **Aleatoriedade (Shuffle):** Para a Categoria C (quem ainda não vendeu), o sistema realiza um sorteio aleatório a cada geração, garantindo que a ordem de recebimento de leads seja justa e não alfabética.
+2. **Venda Total:** Volume financeiro total (Clientes Existentes + Clientes Novos).
+3. **Aleatoriedade (Shuffle):** Para a Categoria C (quem não vendeu período histórico selecionado), o sistema realiza um sorteio aleatório a cada geração, garantindo que a ordem de recebimento de leads seja justa e não alfabética.
 
 ---
 
