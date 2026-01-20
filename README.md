@@ -44,8 +44,8 @@ Os consultores ativos são segmentados em três categorias de acordo com o volum
 
 Para cada filial regional, a distribuição segue a regra da metade superior:
 
-* **Fila 1 (Prioridade Máxima):** Composta pelos **50% "melhores"** da Categoria A.
-* **Fila 2 (Fluxo Geral):** Composta pelos 50% restantes da Categoria A, somados aos consultores das Categorias B e C.
+* **Fila 1 (Prioridade Máxima):** Composta geralmente pelos **50% "melhores"** da Categoria A.
+* **Fila 2 (Fluxo Geral):** Composta pelos 50% restantes da Categoria A, somados aos consultores das Categorias B e C, ordenados pela venda total semanal (e, posteriormente, mensal, para os que não venderam na semana em questão).
 
 ### 4. Critérios de Desempate e Priorização
 
