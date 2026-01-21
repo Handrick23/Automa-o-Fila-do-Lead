@@ -18,17 +18,14 @@ def processar_vendas(dataframe, sufixo=""):
     """
     CONSOLIDAÇÃO DE DADOS:
     Transforma uma lista de transações individuais em um resumo por consultor.
-    - Agrupa por 'Consultor' e 'Tipo Cliente' (Novo/Existente).
-    - Soma os valores de venda.
-    - Calcula o volume total.
     """
     if dataframe is None or dataframe.empty:
         return pd.DataFrame(columns=['Consultor', f'Venda Novo{sufixo}', f'Venda Existente{sufixo}', f'Total{sufixo}'])
     
-    # Padronização de nomes de colunas (Remove espaços e Capitaliza)
+    # Padronização de nomes de colunas
     dataframe.columns = [str(c).strip().title() for c in dataframe.columns]
     
-    # Identifica a coluna numérica de valor (busca por 'Venda' ou a primeira disponível)
+    # Identifica a coluna numérica de valor
     col_valor = 'Venda'
     if col_valor not in dataframe.columns:
         cols_num = dataframe.select_dtypes(include=['number']).columns
@@ -42,22 +39,22 @@ def processar_vendas(dataframe, sufixo=""):
         aggfunc='sum'
     ).fillna(0).reset_index()
 
-    # Garante que as colunas 'Novo' e 'Existente' existam mesmo que não haja vendas no tipo
+    # Garante que as colunas 'Novo' e 'Existente' existam
     for col in ['Novo', 'Existente']:
         if col not in resumo.columns:
             resumo[col] = 0
             
-    # Renomeia colunas para facilitar o merge posterior (ex: Venda Novo_Mensal)
+    # Renomeia colunas para facilitar o merge posterior
     resumo = resumo.rename(columns={'Novo': f'Venda Novo{sufixo}', 'Existente': f'Venda Existente{sufixo}'})
     
-    # Cálculo do Total Geral por consultor (Novo + Existente)
+    # Cálculo do Total Geral por consultor
     resumo[f'Total{sufixo}'] = resumo[f'Venda Novo{sufixo}'] + resumo[f'Venda Existente{sufixo}']
     return resumo
 
 def gerar_fila_do_lead():
     """
     CORE DA REGRA DE NEGÓCIO: 
-    Aplica o ranqueamento em camadas para Fila 1 e Fila 2.
+    Aplica o ranqueamento em camadas e gera o arquivo final com duas abas.
     """
     global df_semana, df_consultores, df_mensal
 
@@ -69,15 +66,21 @@ def gerar_fila_do_lead():
     vendas_semana = processar_vendas(df_semana)
     vendas_mensal = processar_vendas(df_mensal, sufixo="_Mensal")
 
-    # 2. Filtragem de Disponibilidade: Remove quem está com status 'FÉRIAS'
-    base_fila = df_consultores[['Consultor', 'Equipe', 'Justificativa']].rename(columns={'Justificativa': 'Status'})
-    base_fila = base_fila[base_fila['Status'].astype(str).str.upper() != 'FÉRIAS'].copy()
-    
-    # 3. Cruzamento de Dados (Merge): Une consultores com suas vendas semanais e mensais
-    base_fila = pd.merge(base_fila, vendas_semana, on='Consultor', how='left').fillna(0)
-    base_fila = pd.merge(base_fila, vendas_mensal, on='Consultor', how='left').fillna(0)
+    # --- NOVO: PREPARAÇÃO DA BASE COMPLETA PARA A SEGUNDA ABA ---
+    # Unimos todos os consultores com suas vendas (semana e mês) ANTES de filtrar férias
+    df_base_geral = pd.merge(df_consultores[['Consultor', 'Equipe', 'Justificativa']], vendas_semana, on='Consultor', how='left').fillna(0)
+    df_base_geral = pd.merge(df_base_geral, vendas_mensal, on='Consultor', how='left').fillna(0)
 
-    # 4. Normalização de Equipes: Mapeia diversos nomes para uma sigla de Filial comum
+    # Criação das colunas booleanas solicitadas (convertendo para Sim/Não para o Excel)
+    df_base_geral['Férias?'] = df_base_geral['Justificativa'].apply(lambda x: 'Sim' if str(x).upper() == 'FÉRIAS' else 'Não')
+    df_base_geral['Está na Fila?'] = df_base_geral['Férias?'].apply(lambda x: 'Não' if x == 'Sim' else 'Sim')
+    df_base_geral['Vendeu na Semana?'] = df_base_geral['Total'].apply(lambda x: 'Sim' if x > 0 else 'Não')
+    df_base_geral['Vendeu no Mês?'] = df_base_geral['Total_Mensal'].apply(lambda x: 'Sim' if x > 0 else 'Não')
+
+    # 2. Filtragem de Disponibilidade para a Fila (Regra original)
+    base_fila = df_base_geral[df_base_geral['Férias?'] == 'Não'].copy()
+    
+    # 4. Normalização de Equipes
     def mapear_unidade_comercial(equipe):
         e = str(equipe).upper().strip()
         mapeamento = {
@@ -91,8 +94,10 @@ def gerar_fila_do_lead():
 
     base_fila['Filial_Final'] = base_fila['Equipe'].apply(mapear_unidade_comercial)
 
-    # 5. Setup do Excel Final (Estilização de bordas, cores e fontes)
+    # 5. Setup do Excel Final (Estilização)
     wb = Workbook()
+    
+    # --- CONFIGURAÇÃO DA PRIMEIRA ABA: Fila do Lead ---
     ws = wb.active
     ws.title = "Fila do Lead"
     
@@ -104,45 +109,31 @@ def gerar_fila_do_lead():
     font_header = Font(bold=True, color="FFFFFF", size=11)
     font_red = Font(bold=True, color="FF0000", size=11)
     align_center = Alignment(horizontal="center", vertical="center")
+    
     ws.column_dimensions['A'].width = 45
     row_idx = 1
 
-    # 6. Processamento por Filial (Geração das Filas)
+    # Processamento por Filial para a aba principal
     for filial in sorted(base_fila['Filial_Final'].unique()):
         grupo = base_fila[base_fila['Filial_Final'] == filial].copy()
 
-        # --- REGRA 1: FILA 1 (Prioridade Venda Novo na Semana) ---
-        # Ordenação: Quem vendeu mais para clientes NOVOS na semana fica no topo
+        # REGRA 1: FILA 1
         cat_a = grupo[grupo['Total'] > 0].sort_values(by=['Venda Novo', 'Total'], ascending=False)
-        
-        # Divisão F1: A Fila 1 recebe 50% dos vendedores que performaram na semana
         num_vendedores_semana = len(cat_a)
-        # Cálculo: $n\_f1 = \lceil \text{num\_vendedores\_semana} / 2 \rceil$
         n_f1 = math.ceil(num_vendedores_semana / 2) if num_vendedores_semana > 0 else 0
         lista_f1 = cat_a.head(n_f1)
         
-        # --- REGRA 2: FILA 2 - CAMADA 1 (Vendedores da semana que sobraram da F1) ---
-        # Ordenação: Re-ordenados pelo TOTAL geral da semana (Novo + Existente)
+        # REGRA 2: FILA 2
         sobras_cat_a = cat_a.tail(num_vendedores_semana - n_f1).sort_values(by='Total', ascending=False)
-        
-        # --- REGRA 3: FILA 2 - CAMADA 2 (Quem não vendeu na semana, mas vendeu no mês) ---
-        # Ordenação: Baseada puramente no Total Mensal acumulado
         cat_b = grupo[(grupo['Total'] == 0) & (grupo['Total_Mensal'] > 0)].sort_values(by='Total_Mensal', ascending=False)
-        
-        # CAMADA 3: Consultores sem nenhuma venda (Fila de entrada ou baixa performance)
-        # Ordenação: Aleatória (Sorteio) para garantir rotatividade
         cat_c = grupo[(grupo['Total'] == 0) & (grupo['Total_Mensal'] == 0)].sample(frac=1)
-
-        # Concatenação da Fila 2 respeitando a hierarquia das 3 camadas
         lista_f2 = pd.concat([sobras_cat_a, cat_b, cat_c])
 
-        # --- ESCRITA DOS BLOCOS NO EXCEL ---
-        # Título da Filial
+        # Escrita dos Blocos
         cell = ws.cell(row=row_idx, column=1, value=f"{filial} Comercial")
         cell.fill, cell.font, cell.alignment, cell.border = fill_header, font_header, align_center, border_top
         row_idx += 1
 
-        # Bloco Fila 1
         ws.cell(row=row_idx, column=1, value="Fila 1").font = font_red
         ws.cell(row=row_idx, column=1).alignment = align_center
         ws.cell(row=row_idx, column=1).border = border_mid
@@ -152,29 +143,64 @@ def gerar_fila_do_lead():
             c.alignment, c.border = align_center, border_mid
             row_idx += 1
 
-        # Espaçadores estéticos entre filas
         for _ in range(2): 
             ws.cell(row=row_idx, column=1).border = border_mid
             row_idx += 1
 
-        # Bloco Fila 2
         ws.cell(row=row_idx, column=1, value="Fila 2").font = font_red
         ws.cell(row=row_idx, column=1).alignment = align_center
         ws.cell(row=row_idx, column=1).border = border_mid
         row_idx += 1
+        
         total_f2 = len(lista_f2)
         for i, nome in enumerate(lista_f2['Consultor']):
             c = ws.cell(row=row_idx, column=1, value=nome.title())
             c.alignment = align_center
-            # Aplica borda inferior apenas no último nome do bloco
             c.border = border_bot if i == total_f2 - 1 else border_mid
             row_idx += 1
         row_idx += 2 
 
-    # Salva e abre o arquivo automaticamente
+    # --- NOVO: CONFIGURAÇÃO DA SEGUNDA ABA: Base da Fila ---
+    ws_base = wb.create_sheet(title="Base da Fila")
+    
+    # Cabeçalhos solicitados
+    headers_base = [
+        "Consultor", "Equipe", "Férias?", "Está na Fila?", 
+        "Vendeu na Semana?", "Vendeu no Mês?", 
+        "Venda para Clientes Novos", "Venda para Clientes Existentes", "Venda Total"
+    ]
+    
+    # Aplicar cabeçalho com estilo sutil
+    for col, text in enumerate(headers_base, 1):
+        cell = ws_base.cell(row=1, column=col, value=text)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = align_center
+        ws_base.column_dimensions[cell.column_letter].width = 25
+
+    # --- CORREÇÃO AQUI: Preencher dados da Base usando iterrows() para evitar o erro de atributo ---
+    for r_idx, (idx_pd, row) in enumerate(df_base_geral.iterrows(), 2):
+        ws_base.cell(row=r_idx, column=1, value=str(row['Consultor']).title())
+        ws_base.cell(row=r_idx, column=2, value=row['Equipe'])
+        ws_base.cell(row=r_idx, column=3, value=row['Férias?'])
+        ws_base.cell(row=r_idx, column=4, value=row['Está na Fila?'])
+        ws_base.cell(row=r_idx, column=5, value=row['Vendeu na Semana?'])
+        ws_base.cell(row=r_idx, column=6, value=row['Vendeu no Mês?'])
+        
+        # Valores financeiros com formatação (Acessando pelos nomes reais das colunas)
+        c7 = ws_base.cell(row=r_idx, column=7, value=row['Venda Novo'])
+        c8 = ws_base.cell(row=r_idx, column=8, value=row['Venda Existente'])
+        c9 = ws_base.cell(row=r_idx, column=9, value=row['Total'])
+        
+        # Formatação de Moeda (R$)
+        for c in [c7, c8, c9]:
+            c.number_format = '"R$ "#,##0.00'
+            c.alignment = Alignment(horizontal="right")
+
+    # Salva e abre o arquivo
     nome_final = "Fila_do_Lead.xlsx"
     wb.save(nome_final)
-    messagebox.showinfo("Sucesso", "Fila gerada com as novas regras!")
+    messagebox.showinfo("Sucesso", "Fila e Base geradas com sucesso!")
     os.startfile(nome_final)
 
 def importar_planilha():
@@ -186,10 +212,8 @@ def importar_planilha():
     if caminho:
         try:
             xls = pd.ExcelFile(caminho)
-            # Cria um mapa de abas em maiúsculo para busca flexível de nomes
             abas_map = {a.strip().upper(): a for a in xls.sheet_names}
             
-            # Identifica as abas obrigatórias
             aba_sem = abas_map.get('BASE LEAD') or abas_map.get('BASE SEMANAL')
             aba_men = abas_map.get('BASE MENSAL')
             aba_con = abas_map.get('CONSULTORES')
@@ -199,7 +223,6 @@ def importar_planilha():
                 df_mensal = pd.read_excel(xls, aba_men)
                 df_consultores = pd.read_excel(xls, aba_con)
                 
-                # Normaliza a coluna 'Consultor' para garantir que o Merge (VLOOKUP) funcione
                 for d in [df_semana, df_mensal, df_consultores]:
                     d.columns = [str(c).strip().title() for c in d.columns]
                     if 'Consultor' in d.columns:
