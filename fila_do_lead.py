@@ -1,5 +1,6 @@
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils.dataframe import dataframe_to_rows
 import customtkinter as ctk
 import pandas as pd
 import math
@@ -8,79 +9,59 @@ import tkinter.filedialog as filedialog
 from tkinter import messagebox
 
 # =================================================================
-# VARIÁVEIS GLOBAIS: Armazenam os DataFrames carregados via Excel
+# VARIÁVEIS GLOBAIS
 # =================================================================
-df_semana = None      # Armazena os dados da aba "BASE LEAD" (Vendas da semana)
-df_consultores = None  # Armazena os dados da aba "CONSULTORES" (Lista mestre e status)
-df_mensal = None       # Armazena os dados da aba "BASE MENSAL" (Vendas acumuladas)
+df_semana = None
+df_consultores = None
+df_mensal = None
+
+# =================================================================
+# FUNÇÕES AUXILIARES
+# =================================================================
+def aplicar_estilo_padrao(ws, font_header, fill_header, align_center):
+    """Padroniza a estética das abas de base (Cabeçalho azul, R$ e larguras)"""
+    for col_idx, column_cells in enumerate(ws.columns, 1):
+        ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = 25
+        for row_idx, cell in enumerate(column_cells, 1):
+            if row_idx == 1:
+                cell.font, cell.fill, cell.alignment = font_header, fill_header, align_center
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+                header_name = str(ws.cell(row=1, column=col_idx).value).upper()
+                if any(x in header_name for x in ["VENDA", "TOTAL", "VALOR"]):
+                    cell.number_format = '"R$ "#,##0.00'
+                    cell.alignment = Alignment(horizontal="right")
 
 def processar_vendas(dataframe, sufixo=""):
-    """
-    CONSOLIDAÇÃO DE DADOS:
-    Transforma uma lista de transações individuais em um resumo por consultor.
-    """
     if dataframe is None or dataframe.empty:
         return pd.DataFrame(columns=['Consultor', f'Venda Novo{sufixo}', f'Venda Existente{sufixo}', f'Total{sufixo}'])
-    
-    # Padronização de nomes de colunas
     dataframe.columns = [str(c).strip().title() for c in dataframe.columns]
-    
-    # Identifica a coluna numérica de valor
     col_valor = 'Venda'
     if col_valor not in dataframe.columns:
         cols_num = dataframe.select_dtypes(include=['number']).columns
         col_valor = cols_num[0] if len(cols_num) > 0 else 'Venda'
-
-    # Cria uma tabela dinâmica: Consultor nas linhas e Tipo Cliente nas colunas
-    resumo = dataframe.pivot_table(
-        index='Consultor', 
-        columns='Tipo Cliente', 
-        values=col_valor, 
-        aggfunc='sum'
-    ).fillna(0).reset_index()
-
-    # Garante que as colunas 'Novo' e 'Existente' existam
+    resumo = dataframe.pivot_table(index='Consultor', columns='Tipo Cliente', values=col_valor, aggfunc='sum').fillna(0).reset_index()
     for col in ['Novo', 'Existente']:
-        if col not in resumo.columns:
-            resumo[col] = 0
-            
-    # Renomeia colunas para facilitar o merge posterior
+        if col not in resumo.columns: resumo[col] = 0
     resumo = resumo.rename(columns={'Novo': f'Venda Novo{sufixo}', 'Existente': f'Venda Existente{sufixo}'})
-    
-    # Cálculo do Total Geral por consultor
     resumo[f'Total{sufixo}'] = resumo[f'Venda Novo{sufixo}'] + resumo[f'Venda Existente{sufixo}']
     return resumo
 
 def gerar_fila_do_lead():
-    """
-    CORE DA REGRA DE NEGÓCIO: 
-    Aplica o ranqueamento em camadas e gera o arquivo final com duas abas.
-    """
     global df_semana, df_consultores, df_mensal
-
     if df_semana is None or df_consultores is None:
         messagebox.showwarning("Aviso", "Por favor, carregue o arquivo Excel primeiro.")
         return
 
-    # 1. Processamento Prévio: Transforma abas em resumos de performance
     vendas_semana = processar_vendas(df_semana)
     vendas_mensal = processar_vendas(df_mensal, sufixo="_Mensal")
 
-    # --- NOVO: PREPARAÇÃO DA BASE COMPLETA PARA A SEGUNDA ABA ---
-    # Unimos todos os consultores com suas vendas (semana e mês) ANTES de filtrar férias
     df_base_geral = pd.merge(df_consultores[['Consultor', 'Equipe', 'Justificativa']], vendas_semana, on='Consultor', how='left').fillna(0)
     df_base_geral = pd.merge(df_base_geral, vendas_mensal, on='Consultor', how='left').fillna(0)
-
-    # Criação das colunas booleanas solicitadas (convertendo para Sim/Não para o Excel)
     df_base_geral['Férias?'] = df_base_geral['Justificativa'].apply(lambda x: 'Sim' if str(x).upper() == 'FÉRIAS' else 'Não')
-    df_base_geral['Está na Fila?'] = df_base_geral['Férias?'].apply(lambda x: 'Não' if x == 'Sim' else 'Sim')
-    df_base_geral['Vendeu na Semana?'] = df_base_geral['Total'].apply(lambda x: 'Sim' if x > 0 else 'Não')
-    df_base_geral['Vendeu no Mês?'] = df_base_geral['Total_Mensal'].apply(lambda x: 'Sim' if x > 0 else 'Não')
-
-    # 2. Filtragem de Disponibilidade para a Fila (Regra original)
+    
     base_fila = df_base_geral[df_base_geral['Férias?'] == 'Não'].copy()
     
-    # 4. Normalização de Equipes
     def mapear_unidade_comercial(equipe):
         e = str(equipe).upper().strip()
         mapeamento = {
@@ -91,113 +72,82 @@ def gerar_fila_do_lead():
             'SP INTERIOR': 'SP INTERIOR', 'SPI': 'SP INTERIOR'
         }
         return mapeamento.get(e, e)
-
     base_fila['Filial_Final'] = base_fila['Equipe'].apply(mapear_unidade_comercial)
 
-    # 5. Setup do Excel Final (Estilização)
     wb = Workbook()
-    
-    # --- CONFIGURAÇÃO DA PRIMEIRA ABA: Fila do Lead ---
     ws = wb.active
     ws.title = "Fila do Lead"
     
+    # Estilos
     side_m = Side(style='medium', color='000000')
-    border_top = Border(left=side_m, right=side_m, top=side_m)
-    border_mid = Border(left=side_m, right=side_m)
-    border_bot = Border(left=side_m, right=side_m, bottom=side_m)
+    side_t = Side(style='thin', color='000000')
     fill_header = PatternFill(start_color="384B59", end_color="384B59", fill_type="solid")
     font_header = Font(bold=True, color="FFFFFF", size=11)
     font_red = Font(bold=True, color="FF0000", size=11)
     align_center = Alignment(horizontal="center", vertical="center")
-    
-    ws.column_dimensions['A'].width = 45
-    row_idx = 1
+    align_right = Alignment(horizontal="right", vertical="center")
 
-    # Processamento por Filial para a aba principal
+    ws.column_dimensions['A'].width = 40
+    for col in ['B', 'C', 'D']: ws.column_dimensions[col].width = 15
+
+    row_idx = 1
     for filial in sorted(base_fila['Filial_Final'].unique()):
         grupo = base_fila[base_fila['Filial_Final'] == filial].copy()
 
-        # REGRA 1: FILA 1
+        # RESTAURAÇÃO DA REGRA DE NEGÓCIO ORIGINAL (Fila 1 = 50% melhores)
         cat_a = grupo[grupo['Total'] > 0].sort_values(by=['Venda Novo', 'Total'], ascending=False)
-        num_vendedores_semana = len(cat_a)
-        n_f1 = math.ceil(num_vendedores_semana / 2) if num_vendedores_semana > 0 else 0
+        n_f1 = math.ceil(len(cat_a) / 2) if len(cat_a) > 0 else 0
         lista_f1 = cat_a.head(n_f1)
         
-        # REGRA 2: FILA 2
-        sobras_cat_a = cat_a.tail(num_vendedores_semana - n_f1).sort_values(by='Total', ascending=False)
+        sobras_cat_a = cat_a.tail(len(cat_a) - n_f1).sort_values(by='Total', ascending=False)
         cat_b = grupo[(grupo['Total'] == 0) & (grupo['Total_Mensal'] > 0)].sort_values(by='Total_Mensal', ascending=False)
         cat_c = grupo[(grupo['Total'] == 0) & (grupo['Total_Mensal'] == 0)].sample(frac=1)
         lista_f2 = pd.concat([sobras_cat_a, cat_b, cat_c])
 
-        # Escrita dos Blocos
+        # Escrita Cabeçalho Filial
         cell = ws.cell(row=row_idx, column=1, value=f"{filial} Comercial")
-        cell.fill, cell.font, cell.alignment, cell.border = fill_header, font_header, align_center, border_top
+        cell.fill, cell.font, cell.alignment, cell.border = fill_header, font_header, align_center, Border(top=side_m, left=side_m, right=side_m)
+        for col, txt in enumerate(["NOVO", "EXISTENTE", "TOTAL"], 2):
+            c = ws.cell(row=row_idx, column=col, value=txt)
+            c.font, c.alignment, c.border = Font(bold=True, size=9), align_center, Border(top=side_m, bottom=side_t)
         row_idx += 1
 
+        # Fila 1
         ws.cell(row=row_idx, column=1, value="Fila 1").font = font_red
-        ws.cell(row=row_idx, column=1).alignment = align_center
-        ws.cell(row=row_idx, column=1).border = border_mid
+        ws.cell(row=row_idx, column=1).alignment, ws.cell(row=row_idx, column=1).border = align_center, Border(left=side_m, right=side_m)
         row_idx += 1
-        for nome in lista_f1['Consultor']:
-            c = ws.cell(row=row_idx, column=1, value=nome.title())
-            c.alignment, c.border = align_center, border_mid
+        for _, r in lista_f1.iterrows():
+            ws.cell(row=row_idx, column=1, value=str(r['Consultor']).title()).alignment = align_center
+            ws.cell(row=row_idx, column=1).border = Border(left=side_m, right=side_m)
+            for col, val in enumerate([r['Venda Novo'], r['Venda Existente'], r['Total']], 2):
+                c = ws.cell(row=row_idx, column=col, value=val)
+                c.number_format, c.alignment = '"R$ "#,##0.00', align_right
             row_idx += 1
 
-        for _ in range(2): 
-            ws.cell(row=row_idx, column=1).border = border_mid
-            row_idx += 1
-
+        # Fila 2
+        for _ in range(1): ws.cell(row=row_idx, column=1).border = Border(left=side_m, right=side_m); row_idx += 1
         ws.cell(row=row_idx, column=1, value="Fila 2").font = font_red
-        ws.cell(row=row_idx, column=1).alignment = align_center
-        ws.cell(row=row_idx, column=1).border = border_mid
+        ws.cell(row=row_idx, column=1).alignment, ws.cell(row=row_idx, column=1).border = align_center, Border(left=side_m, right=side_m)
         row_idx += 1
-        
-        total_f2 = len(lista_f2)
-        for i, nome in enumerate(lista_f2['Consultor']):
-            c = ws.cell(row=row_idx, column=1, value=nome.title())
-            c.alignment = align_center
-            c.border = border_bot if i == total_f2 - 1 else border_mid
+        for i, (_, r) in enumerate(lista_f2.iterrows()):
+            ws.cell(row=row_idx, column=1, value=str(r['Consultor']).title()).alignment = align_center
+            borda = Border(left=side_m, right=side_m, bottom=side_m) if i == len(lista_f2)-1 else Border(left=side_m, right=side_m)
+            ws.cell(row=row_idx, column=1).border = borda
+            for col, val in enumerate([r['Venda Novo'], r['Venda Existente'], r['Total']], 2):
+                c = ws.cell(row=row_idx, column=col, value=val)
+                c.number_format, c.alignment = '"R$ "#,##0.00', align_right
+                if i == len(lista_f2)-1: c.border = Border(bottom=side_m)
             row_idx += 1
-        row_idx += 2 
+        row_idx += 2
 
-    # --- NOVO: CONFIGURAÇÃO DA SEGUNDA ABA: Base da Fila ---
-    ws_base = wb.create_sheet(title="Base da Fila")
-    
-    # Cabeçalhos solicitados
-    headers_base = [
-        "Consultor", "Equipe", "Férias?", "Está na Fila?", 
-        "Vendeu na Semana?", "Vendeu no Mês?", 
-        "Venda para Clientes Novos", "Venda para Clientes Existentes", "Venda Total"
-    ]
-    
-    # Aplicar cabeçalho com estilo sutil
-    for col, text in enumerate(headers_base, 1):
-        cell = ws_base.cell(row=1, column=col, value=text)
-        cell.font = font_header
-        cell.fill = fill_header
-        cell.alignment = align_center
-        ws_base.column_dimensions[cell.column_letter].width = 25
+    # Gerar e Formatar as outras abas conforme solicitado
+    abas = {"Base Semanal": df_semana, "Base Mensal": df_mensal, "Base Consultores": df_consultores, "Resumo Processamento": df_base_geral}
+    for nome, df in abas.items():
+        if df is not None:
+            nws = wb.create_sheet(title=nome)
+            for r in dataframe_to_rows(df, index=False, header=True): nws.append(r)
+            aplicar_estilo_padrao(nws, font_header, fill_header, align_center)
 
-    # --- CORREÇÃO AQUI: Preencher dados da Base usando iterrows() para evitar o erro de atributo ---
-    for r_idx, (idx_pd, row) in enumerate(df_base_geral.iterrows(), 2):
-        ws_base.cell(row=r_idx, column=1, value=str(row['Consultor']).title())
-        ws_base.cell(row=r_idx, column=2, value=row['Equipe'])
-        ws_base.cell(row=r_idx, column=3, value=row['Férias?'])
-        ws_base.cell(row=r_idx, column=4, value=row['Está na Fila?'])
-        ws_base.cell(row=r_idx, column=5, value=row['Vendeu na Semana?'])
-        ws_base.cell(row=r_idx, column=6, value=row['Vendeu no Mês?'])
-        
-        # Valores financeiros com formatação (Acessando pelos nomes reais das colunas)
-        c7 = ws_base.cell(row=r_idx, column=7, value=row['Venda Novo'])
-        c8 = ws_base.cell(row=r_idx, column=8, value=row['Venda Existente'])
-        c9 = ws_base.cell(row=r_idx, column=9, value=row['Total'])
-        
-        # Formatação de Moeda (R$)
-        for c in [c7, c8, c9]:
-            c.number_format = '"R$ "#,##0.00'
-            c.alignment = Alignment(horizontal="right")
-
-    # Salva e abre o arquivo
     nome_final = "Fila_do_Lead.xlsx"
     wb.save(nome_final)
     messagebox.showinfo("Sucesso", "Fila e Base geradas com sucesso!")
