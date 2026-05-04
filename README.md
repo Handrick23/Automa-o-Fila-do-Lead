@@ -87,9 +87,9 @@ Para evitar que erros humanos nas planilhas interrompam o processo, o algoritmo 
 
 Para o funcionamento correto, o arquivo Excel deve conter as seguintes abas (nomes flexíveis):
 
-1. **Base Lead / Semanal:** Colunas `Consultor`, `Tipo Cliente` e `Venda`.
+1. **Base Semanal:** Colunas obrigatórias: `Consultor`, `Tipo Cliente` e `Venda`.
 2. **Base Mensal:** Mesma estrutura, mas com o histórico do mês.
-3. **Consultores:** Colunas `Consultor`, `Equipe` e `Justificativa` (Status).
+3. **Consultores:** Colunas obrigatórias: `Consultor`, `Equipe` e `Justificativa` (Status).
 
 ---
 
